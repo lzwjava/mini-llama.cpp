@@ -50,6 +50,7 @@ typedef struct {
     uint64_t      n_tensors, n_kv;
     gguf_kv      *kvs;      /* n_kv entries (heap)   */
     gguf_tensor  *tensors;  /* n_tensors entries (heap) */
+    uint64_t      data_start; /* absolute file offset of data section start */
 } gguf_meta;
 
 int  gguf_load (FILE *f, gguf_meta *m);      /* parse header+kv+tensor table */

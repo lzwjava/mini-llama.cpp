@@ -46,8 +46,8 @@ int main(int argc, char **argv){
     if(lay)  printf("  layers = %llu\n", lay->u);
     if(embd) printf("  embedding = %llu\n", embd->u);
     gguf_tensor *te=gguf_find(&m,"token_embd.weight");
-    if(te)   printf("  vocab = %llu (token_embd %s, dim %llu)\n",
-                    te->dims[0], ggml_type_name(te->type), te->dims[1]);
+    if(te)   printf("  vocab  = %llu (token_embd %s, hidden=%llu)\n",
+                    te->dims[te->n_dims-1], ggml_type_name(te->type), te->dims[0]);
     printf("  first tensors:\n");
     for(int i=0;i<6 && i<(int)m.n_tensors;i++){
         printf("    %-36s %5s  dims=", m.tensors[i].name, ggml_type_name(m.tensors[i].type));
@@ -67,9 +67,12 @@ int main(int argc, char **argv){
     cudaMemcpy(gpu,orig,(size_t)n*4,cudaMemcpyHostToDevice);
     elem_fp32<<<(int)((n+255)/256),256>>>(gpu,(int)n);
     cudaMemcpy(host,gpu,(size_t)n*4,cudaMemcpyDeviceToHost);
+    cudaError_t ce = cudaGetLastError();
     double maxerr=0; for(uint64_t i=0;i<n;i++){ double e=fabs(host[i]-(2.0*orig[i]+1.0)); if(e>maxerr)maxerr=e; }
-    printf("\n== real tensor: %s (%s, n=%llu) ==\n  GPU kernel y=2x+1 max|err| = %.3e  %s\n",
-           t->name, ggml_type_name(t->type), n, maxerr, maxerr<1e-4? "PASS":"FAIL");
+    printf("\n== real tensor: %s (%s, n=%llu) ==\n  cuda_err=%s\n  orig[0..2]=%.4f %.4f %.4f  gpu[0..2]=%.4f %.4f %.4f\n  max|err| = %.3e  %s\n",
+           t->name, ggml_type_name(t->type), n, cudaGetErrorString(ce),
+           orig[0],orig[1],orig[2], host[0],host[1],host[2],
+           maxerr, maxerr<1e-4? "PASS":"FAIL");
     free(orig);
 
     /* ---------- 3) cuBLAS GEMM vs CPU ---------- */
@@ -87,9 +90,11 @@ int main(int argc, char **argv){
     cudaDeviceSynchronize();
     double dt=(now_s()-t0)/10.0;
     cudaMemcpy(Cg,dC,(size_t)N*N*4,cudaMemcpyDeviceToHost);
-    for(int r=0;r<N;r++) for(int c=0;c<N;c++){ float s=0; for(int k=0;k<N;k++) s+=A[r*N+k]*B[k*N+c]; Cc[r*N+c]=s; }
+    /* cuBLAS is column-major: with row-major buffers this computes
+       Cc[i*N+j] = sum_k A[k*N+j] * B[i*N+k]  -- emulate exactly that */
+    for(int r=0;r<N;r++) for(int c=0;c<N;c++){ float s=0; for(int k=0;k<N;k++) s+=A[k*N+c]*B[r*N+k]; Cc[r*N+c]=s; }
     double maxrel=0; for(int i=0;i<N*N;i++){ double d=fabs(Cg[i]-Cc[i])/(fabs(Cc[i])+1e-12); if(d>maxrel)maxrel=d; }
-    printf("\n== cuBLAS GEMM %dx%d ==\n  GFLOPS=%.1f  max rel err=%.2e  %s\n",
+    printf("\n== cuBLAS GEMM %dx%d ==\n  GFLOPS=%.1f  max rel err=%.2e  %s\n", N,N,
            2.0*N*N*N/dt/1e9, maxrel, maxrel<1e-3? "PASS":"FAIL");
 
     cudaDeviceReset();

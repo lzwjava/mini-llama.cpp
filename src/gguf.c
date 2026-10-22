@@ -19,7 +19,7 @@ static char*    rd_str(FILE*f){ uint64_t n=rd_u64(f); char*s=(char*)malloc((size
 static gguf_kv read_kv(FILE *f){
     gguf_kv kv; kv.key=NULL; kv.s=NULL; kv.u=0; kv.i=0; kv.f=0.f;
     kv.key  = rd_str(f);
-    kv.type = rd_u8(f);
+    kv.type = (int)rd_u32(f);  /* value type field is uint32 in GGUF v3 */
     switch (kv.type){
         case 0: case 7: kv.u=rd_u8(f);  break;
         case 1:        kv.i=rd_u8(f);   break;
@@ -53,12 +53,12 @@ static gguf_kv read_kv(FILE *f){
 
 int gguf_load(FILE *f, gguf_meta *m){
     if(fread(m->magic,4,1,f)!=1) return -1;
-    if(memcmp(m->magic,"GGUF",4)!=0) return -2;
+    if(memcmp(m->magic,"GGUF",4)!=0 && memcmp(m->magic,"GGFU",4)!=0) return -2; // accept LE (GGUF) and BE-marked (GGFU) files
     m->version   = rd_u32(f);
     m->n_tensors = rd_u64(f);
     m->n_kv      = rd_u64(f);
     m->kvs = (gguf_kv*)malloc((size_t)m->n_kv*sizeof(gguf_kv));
-    for(uint64_t i=0;i<m->n_kv;i++){ m->kvs[i]=read_kv(f); fprintf(stderr,"kv[%llu] %s type=%d\n",(unsigned long long)i,m->kvs[i].key,m->kvs[i].type); }
+    for(uint64_t i=0;i<m->n_kv;i++) m->kvs[i]=read_kv(f);
     m->tensors = (gguf_tensor*)malloc((size_t)m->n_tensors*sizeof(gguf_tensor));
     for(uint64_t i=0;i<m->n_tensors;i++){
         gguf_tensor *t=&m->tensors[i];
@@ -69,9 +69,14 @@ int gguf_load(FILE *f, gguf_meta *m){
         for(uint32_t d=0;d<nd;d++) t->dims[d]=rd_u64(f);
         t->type=rd_u32(f);
         t->offset=rd_u64(f);
-        uint64_t ntkv=rd_u64(f);            /* per-tensor key-values (GGUF v2+) */
-        for(uint64_t k=0;k<ntkv;k++){ gguf_kv kk=read_kv(f); free(kk.key); if(kk.s) free(kk.s); }
+        /* GGUF v3 tensor info has no per-tensor key-value store */
     }
+    /* data section start: end of tensor table, padded to alignment (default 32) */
+    uint64_t align = 32;
+    gguf_kv *ak = gguf_get(m,"general.alignment");
+    if(ak && ak->type==4) align = ak->u;
+    long pos = ftell(f);
+    m->data_start = ((uint64_t)pos + align - 1) / align * align;
     return 0;
 }
 
@@ -95,7 +100,7 @@ gguf_tensor *gguf_find(gguf_meta *m, const char *name){
 
 int gguf_read_float(FILE *f, gguf_meta *m, gguf_tensor *t, float *out){
     uint64_t n=1; for(uint32_t d=0;d<t->n_dims;d++) n*=t->dims[d];
-    if(fseek(f,(long)t->offset,SEEK_SET)!=0) return -1;
+    if(fseek(f,(long)(m->data_start + t->offset),SEEK_SET)!=0) return -1; /* offset is relative to data section */
     if(t->type==GGML_F32){
         if(fread(out,4,(size_t)n,f)!=(size_t)n) return -2;
     } else if(t->type==GGML_F16){
