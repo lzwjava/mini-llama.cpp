@@ -1,3 +1,6 @@
 *.o
 mini-llama
 build/
+
+# Compiled binaries
+mini-llama-gpu
