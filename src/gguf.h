@@ -34,6 +34,12 @@ typedef struct {
     int64_t   i;     /* i8/i16/i32/i64                  */
     float     f;     /* f32 (f64 truncated)             */
     char     *s;     /* string value (owned)            */
+    /* arrays (type 9): exactly one of the below is filled */
+    uint32_t  arr_count;
+    char    **arr_str;   /* elem type 8  */
+    float    *arr_f32;   /* elem type 6  */
+    uint32_t *arr_u32;   /* elem type 4  */
+    uint8_t  *arr_raw;   /* any other elem type */
 } gguf_kv;
 
 typedef struct {

@@ -31,17 +31,29 @@ static gguf_kv read_kv(FILE *f){
         case 8:        kv.s=rd_str(f);  break;
         case 9: { /* [u32 elem_type, u64 n, n * elem] */
             uint32_t et=rd_u32(f); uint64_t n=rd_u64(f);
-            for(uint64_t i=0;i<n;i++)
-                switch(et){
-                    case 0: case 1: case 7: rd_u8(f);  break;
-                    case 2: case 3:        rd_u16(f);  break;
-                    case 4: case 5:        rd_u32(f);  break;
-                    case 6:                rd_f32(f);  break;
-                    case 10: case 11:      rd_i64(f);  break;
-                    case 12:               rd_f64(f);  break;
-                    case 8:  { char *x=rd_str(f); free(x); } break;
-                    default: fprintf(stderr,"gguf: unsupported array elem type %u\n",et); exit(1);
-                }
+            kv.arr_count = n < 0x1000000 ? (uint32_t)n : 0;
+            if (et == 8 && kv.arr_count > 0){
+                kv.arr_str = (char**)calloc(kv.arr_count, sizeof(char*));
+                for (uint32_t i=0;i<kv.arr_count;i++) kv.arr_str[i]=rd_str(f);
+            } else if (et == 6 && kv.arr_count > 0){
+                kv.arr_f32 = (float*)malloc((size_t)kv.arr_count*4);
+                for (uint32_t i=0;i<kv.arr_count;i++) kv.arr_f32[i]=rd_f32(f);
+            } else if (et == 4 && kv.arr_count > 0){
+                kv.arr_u32 = (uint32_t*)malloc((size_t)kv.arr_count*4);
+                for (uint32_t i=0;i<kv.arr_count;i++) kv.arr_u32[i]=rd_u32(f);
+            } else {
+                for(uint64_t i=0;i<n;i++)
+                    switch(et){
+                        case 0: case 1: case 7: rd_u8(f);  break;
+                        case 2: case 3:        rd_u16(f);  break;
+                        case 4: case 5:        rd_u32(f);  break;
+                        case 6:                rd_f32(f);  break;
+                        case 10: case 11:      rd_i64(f);  break;
+                        case 12:               rd_f64(f);  break;
+                        case 8:  { char *x=rd_str(f); free(x); } break;
+                        default: fprintf(stderr,"gguf: unsupported array elem type %u\n",et); exit(1);
+                    }
+            }
         } break;
         case 10: kv.u=rd_u64(f);  break;
         case 11: kv.i=rd_i64(f);  break;
@@ -81,7 +93,14 @@ int gguf_load(FILE *f, gguf_meta *m){
 }
 
 void gguf_free(gguf_meta *m){
-    for(uint64_t i=0;i<m->n_kv;i++){ free(m->kvs[i].key); if(m->kvs[i].s) free(m->kvs[i].s); }
+    for(uint64_t i=0;i<m->n_kv;i++){
+        free(m->kvs[i].key);
+        if(m->kvs[i].s) free(m->kvs[i].s);
+        if(m->kvs[i].arr_count){
+            if(m->kvs[i].arr_str){ for(uint32_t a=0;a<m->kvs[i].arr_count;a++) free(m->kvs[i].arr_str[a]); free(m->kvs[i].arr_str); }
+            free(m->kvs[i].arr_f32); free(m->kvs[i].arr_u32); 
+        }
+    }
     free(m->kvs);
     for(uint64_t i=0;i<m->n_tensors;i++){ free(m->tensors[i].name); free(m->tensors[i].dims); }
     free(m->tensors);
@@ -111,7 +130,7 @@ int gguf_read_float(FILE *f, gguf_meta *m, gguf_tensor *t, float *out){
             unsigned int h=buf[2*i]|((unsigned int)buf[2*i+1]<<8);
             int sign=(h&0x8000)?-1:1, exp=(h>>10)&0x1F, man=h&0x3FF;
             float v;
-            if(exp==0) v=0.0f;
+            if(exp==0){ if(man==0) v=0.0f; else v=(float)sign*(float)man*5.9604644775390625e-08f; }
             else if(exp==31) v=(man==0)?((sign>0)?1e30f:-1e30f):0.0f;
             else { union{ int bi; float bf; } u;
                    u.bi=(sign<0?0x80000000:0)|((exp-15+127)<<23)|(man<<13); v=u.bf; }

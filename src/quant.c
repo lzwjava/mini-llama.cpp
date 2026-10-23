@@ -43,10 +43,15 @@ void dequantize_row_q8_0(const block_q8_0 *x, float *y, int64_t k){
     }
 }
 
+/* NOTE: the GGUF FILE stores q4_K scales differently from ggml's in-memory
+   (repacked) layout.  llama.cpp repacks on load; we decode the FILE directly.
+   file scales[12]: sc[0..3],m[0..3] in scales[0..7] low6; scales[8..11] hold
+   the high nibbles of sc[4..7] (low) and m[4..7] (high). */
 static inline void q4k_get_scale_min(int j, const uint8_t *q, uint8_t *d, uint8_t *m){
-    if (j < 4){ *d = q[j] & 63; *m = q[j + 4] & 63; }
-    else      { *d = (q[j+4] & 0xF) | ((q[j-4] >> 6) << 4);
-                *m = (q[j+4] >>  4) | ((q[j-0] >> 6) << 4); }
+    if (j < 4){ *d = q[j]   & 0x3F;
+                *m = q[j+4] & 0x3F; }
+    else      { *d = (q[j+4] & 0x0F) | ((q[j-4] >> 2) & 0x30);
+                *m = (q[j+4] >>   4) | ((q[j-0] >> 2) & 0x30); }
 }
 
 void dequantize_row_q4_K(const block_q4_K *x, float *y, int64_t k){

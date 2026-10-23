@@ -18,7 +18,10 @@ static inline float q_fp16_to_fp32(uint16_t h){
     int exp  = (h >> 10) & 0x1F;
     int man  = h & 0x3FF;
     float v;
-    if (exp == 0)       v = 0.0f;
+    if (exp == 0){                  /* zero or subnormal fp16 */
+        if (man == 0) v = 0.0f;
+        else          v = (float)sign * (float)man * 5.9604644775390625e-08f; /* man*2^-24 */
+    }
     else if (exp == 31) v = (man == 0) ? (sign > 0 ? 1e30f : -1e30f) : 0.0f;
     else { union { int bi; float bf; } u;
            u.bi = (sign < 0 ? 0x80000000 : 0) | ((exp - 15 + 127) << 23) | (man << 13); v = u.bf; }
@@ -34,7 +37,7 @@ typedef struct { uint8_t ql[QK_K/2]; uint8_t qh[QK_K/4]; int8_t scales[QK_K/16];
 typedef struct { int elems; int bytes; } quant_spec;
 quant_spec quant_spec_of(int ggml_type);
 
-/* dequantize `raw` (blocks) into `out` (ne floats).
+/* dequantize `raw` (blocks, GGUF-FILE layout) into `out` (ne floats).
    Supports F32(0),F16(1),Q5_0(6),Q8_0(8),Q4_K(12),Q6_K(14). Returns 0 on success. */
 int dequantize_tensor(const uint8_t *raw, int ggml_type, uint64_t ne, float *out);
 
